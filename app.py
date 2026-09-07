@@ -1,3 +1,4 @@
+
 import datetime as dt
 import io
 import os
@@ -80,10 +81,6 @@ def fetch_ecos_bond_yields(api_key: str):
 # KRX 시세로 현재가·역사적 변동성 자동계산
 @st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
 def fetch_krx_price_history(ticker: str, lookback_days: int):
-    """
-    KRX 일별 종가로 최근가와 역사적 변동성(연율화)을 계산한다.
-    로그수익률 표준편차 × sqrt(252). 실패하면 (None, 에러메시지)를 돌려준다.
-    """
     try:
         end = dt.date.today()
         start = end - dt.timedelta(days=int(lookback_days * 1.7) + 15)  # 주말/공휴일 버퍼
@@ -117,7 +114,6 @@ def fetch_krx_price_history(ticker: str, lookback_days: int):
 # DART 공시로 배당수익률(q) 자동조회
 @st.cache_data(ttl=7 * 24 * 60 * 60, show_spinner=False)
 def fetch_dart_corp_codes(dart_key: str):
-    """전체 상장기업 고유번호(corp_code) 매핑을 받아서 1주일 캐싱."""
     try:
         url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={dart_key}"
         resp = requests.get(url, timeout=15)
@@ -143,10 +139,6 @@ def fetch_dart_corp_codes(dart_key: str):
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
 def fetch_dart_dividend_yield(dart_key: str, ticker: str, current_price: float):
-    """
-    배당에 관한 사항(alotMatter)에서 주당 현금배당금을 가져와 현재가 대비 배당수익률을 계산한다.
-    최근 2개 사업연도를 순서대로 시도한다.
-    """
     mapping, err = fetch_dart_corp_codes(dart_key)
     if mapping is None:
         return None, err
@@ -252,6 +244,11 @@ def build_curve(tenors, yields, kind="linear"):
     return interp1d(tenors, yields, kind=kind, fill_value="extrapolate")
 
 
+# 국채 금리 곡선 보간
+def build_curve(tenors, yields, kind="linear"):
+    return interp1d(tenors, yields, kind=kind, fill_value="extrapolate")
+
+
 @st.cache_data(ttl=7 * 24 * 60 * 60, show_spinner=False)
 def build_company_options(dart_key: str):
     """selectbox에 넣을 '회사명 (종목코드)' 문자열 리스트를 이름순으로 만든다."""
@@ -262,8 +259,7 @@ def build_company_options(dart_key: str):
     return options, None
 
 
-# 사이드바: 실데이터 자동 불러오기
-st.sidebar.header("데이터 자동 불러오기")
+st.sidebar.header("모델 파라미터")
 
 dart_key = os.getenv("DART_API_KEY", "")
 ticker = None
@@ -314,7 +310,7 @@ if auto_price_vol or auto_dividend:
 
 if auto_dividend:
     if not dart_key:
-        st.sidebar.info("DART 인증키를 입력하면 배당수익률을 가져와요.")
+        st.sidebar.info("DART 인증키를 입력하면 배당수익률을 가져와 주세요.")
     else:
         basis_price = fetched_price
         if basis_price is None:
@@ -337,17 +333,11 @@ if auto_dividend:
         else:
             st.sidebar.error("기준주가를 확보하지 못함")
 
-# 사이드바: 옵션 조건 (자동으로 가져온 값을 기본값으로 쓰고, 직접 바꿀 수 있음)
+
 st.sidebar.header("옵션 조건")
 
 
 def sync_fetched_value(widget_key: str, tracker_key: str, fetched_value):
-    """
-    자동으로 가져온 값이 이전과 달라졌을 때만 위젯 state를 새 값으로 덮어쓴다.
-    이렇게 안 하면 위젯을 한 번 그린 뒤에는 fetch 값이 바뀌어도 화면에 반영되지 않는다
-    (스트림릿 위젯은 session_state에 값이 잡히면 그 이후 value= 인자를 무시함).
-    사용자가 직접 고친 값은 fetch 값이 실제로 바뀌기 전까지는 건드리지 않는다.
-    """
     if fetched_value is None:
         return
     if st.session_state.get(tracker_key) != fetched_value:
@@ -356,32 +346,26 @@ def sync_fetched_value(widget_key: str, tracker_key: str, fetched_value):
 
 
 sync_fetched_value("S_input", "_fetched_price_seen", fetched_price)
-S = st.sidebar.number_input(
-    "기초주식 현재가 (S)", min_value=0.01,
-    value=float(fetched_price) if fetched_price else 50000.0, step=100.0,
-    key="S_input",
-)
+st.session_state.setdefault("S_input", 50000.0)
+S = st.sidebar.number_input("기초주식 현재가 (S)", min_value=0.01, step=100.0, key="S_input")
+
 K = st.sidebar.number_input(
     "행사가 (K)", min_value=0.01,
     value=float(fetched_price) if fetched_price else 55000.0, step=100.0,
 )
 if fetched_price:
-    st.sidebar.caption("K는 일단 S랑 같게 채워놨어요. 실제 행사가로 꼭 바꿔주세요, 이 값은 자동으로 못 가져와요.")
+    st.sidebar.caption("행사가 입력 필요")
 T = st.sidebar.number_input("잔존만기 (T, 년)", min_value=0.01, value=4.0, step=0.1)
 
 sync_fetched_value("sigma_pct_input", "_fetched_vol_seen", float(fetched_vol * 100) if fetched_vol else None)
+st.session_state.setdefault("sigma_pct_input", 45.0)
 sigma_pct = st.sidebar.slider(
-    "변동성 σ (연율, %)", min_value=1.0, max_value=150.0,
-    value=float(fetched_vol * 100) if fetched_vol else 45.0, step=0.5,
-    key="sigma_pct_input",
+    "변동성 σ (연율, %)", min_value=1.0, max_value=150.0, step=0.5, key="sigma_pct_input",
 )
 
 sync_fetched_value("q_pct_input", "_fetched_div_seen", float(fetched_div * 100) if fetched_div else None)
-q_pct = st.sidebar.number_input(
-    "배당수익률 q (%)", min_value=0.0,
-    value=float(fetched_div * 100) if fetched_div else 0.0, step=0.1,
-    key="q_pct_input",
-)
+st.session_state.setdefault("q_pct_input", 0.0)
+q_pct = st.sidebar.number_input("배당수익률 q (%)", min_value=0.0, step=0.1, key="q_pct_input")
 option_type = st.sidebar.radio("옵션 종류", ["콜 (매수권/워런트)", "풋"], index=0)
 
 sigma = sigma_pct / 100
@@ -394,7 +378,6 @@ FALLBACK_YIELD_DATE = "2026-09-02 (5·20년은 보간 추정)"
 FALLBACK_YIELDS = {"1y": 3.46, "3y": 3.88, "5y": 4.02, "10y": 4.37, "20y": 4.50, "30y": 4.63}
 
 st.sidebar.header("무위험이자율 (국채 금리)")
-# st.sidebar.caption("ECOS에서 매일 최신 국고채 금리를 자동으로 가져와요 (하루 한 번만 조회).")
 
 current_yields = dict(FALLBACK_YIELDS)
 yield_source_note = f"자동조회 실패로 폴백값 사용 중 (기준일 {FALLBACK_YIELD_DATE})"
@@ -413,27 +396,31 @@ if ecos_key:
     if fetched:
         current_yields = {k: fetched[k] for k in TENOR_LABELS}
         fetched_date = fetched.get("1y_date", "")
-        yield_source_note = f"ECOS 자동조회 (기준일 {fetched_date})"
-    else:
-        st.sidebar.error(f"자동조회 실패: {error}, 폴백값 사용")
-else:
-    st.sidebar.warning("ECOS 인증키가 없어서 폴백값을 쓰고 있어요.")
+        yield_source_note = f"ECOS 조회 (기준일 {fetched_date})"
+
 
 st.sidebar.caption(yield_source_note)
 
-y1 = st.sidebar.number_input("1년물 (%)", value=current_yields["1y"], step=0.01, format="%.2f")
-y3 = st.sidebar.number_input("3년물 (%)", value=current_yields["3y"], step=0.01, format="%.2f")
-y5 = st.sidebar.number_input("5년물 (%)", value=current_yields["5y"], step=0.01, format="%.2f")
-y10 = st.sidebar.number_input("10년물 (%)", value=current_yields["10y"], step=0.01, format="%.2f")
-y20 = st.sidebar.number_input("20년물 (%)", value=current_yields["20y"], step=0.01, format="%.2f")
-y30 = st.sidebar.number_input("30년물 (%)", value=current_yields["30y"], step=0.01, format="%.2f")
+YIELD_WIDGET_KEYS = {"1y": "y1_input", "3y": "y3_input", "5y": "y5_input",
+                      "10y": "y10_input", "20y": "y20_input", "30y": "y30_input"}
+
+for tenor_key, widget_key in YIELD_WIDGET_KEYS.items():
+    st.session_state.setdefault(widget_key, current_yields[tenor_key])
+
+if st.sidebar.button("ECOS 조회값으로 되돌리기"):
+    for tenor_key, widget_key in YIELD_WIDGET_KEYS.items():
+        st.session_state[widget_key] = current_yields[tenor_key]
+
+y1 = st.sidebar.number_input("1년물 (%)", step=0.01, format="%.2f", key="y1_input")
+y3 = st.sidebar.number_input("3년물 (%)", step=0.01, format="%.2f", key="y3_input")
+y5 = st.sidebar.number_input("5년물 (%)", step=0.01, format="%.2f", key="y5_input")
+y10 = st.sidebar.number_input("10년물 (%)", step=0.01, format="%.2f", key="y10_input")
+y20 = st.sidebar.number_input("20년물 (%)", step=0.01, format="%.2f", key="y20_input")
+y30 = st.sidebar.number_input("30년물 (%)", step=0.01, format="%.2f", key="y30_input")
 interp_kind = st.sidebar.selectbox("보간 방식", ["linear", "quadratic", "cubic"], index=0)
 
 tenors = np.array([1, 3, 5, 10, 20, 30])
 yields = np.array([y1, y3, y5, y10, y20, y30])
-
-if tuple(yields) != tuple(current_yields.values()):
-    st.sidebar.caption("직접 수정한 값을 쓰고 있어요.")
 
 curve = build_curve(tenors, yields, kind=interp_kind)
 r = float(curve(T)) / 100
@@ -451,13 +438,13 @@ with col1:
 with col2:
     st.metric(f"무위험이자율 r (T={T:.1f}년)", f"{r*100:.3f}%")
 with col3:
-    moneyness = "ITM" if (S > K and opt_key == "call") or (S < K and opt_key == "put") else "OTM"
+    moneyness = "ITM (내가격)" if (S > K and opt_key == "call") or (S < K and opt_key == "put") else "OTM (외가격)"
     st.metric("현재 상태", moneyness)
 
 if S / K > 3 or S / K < 0.33:
     st.caption(
-        f"현재가(S={S:,.0f})와 행사가(K={K:,.0f})가 {S/K:.1f}배 차이 나요. "
-        "K를 자동으로 채워주지는 않으니, 실제 종목의 행사가를 넣은 게 맞는지 확인해보세요."
+        f"현재가(S={S:,.0f})와 행사가(K={K:,.0f})가 {S/K:.1f}배 차이 남. "
+        "K를 자동으로 채워주지는 않으니, 실제 종목의 행사가를 넣은 게 맞는지 확인 필요."
     )
 
 st.divider()
@@ -501,8 +488,6 @@ st.plotly_chart(fig_curve, width='stretch')
 
 st.divider()
 
-# st.subheader("그릭스")
-
 
 def format_greek(v):
     if v != 0 and abs(v) < 0.001:
@@ -524,8 +509,6 @@ greeks_df = pd.DataFrame({
 st.dataframe(greeks_df, hide_index=True, width='stretch')
 
 st.divider()
-
-# st.subheader("가정을 바꾸면 가격이 어떻게 달라지는지")
 
 tab1, tab2, tab3, tab4 = st.tabs(["만기별 금리 적용 비교", "금리 민감도", "변동성 민감도", "주가 민감도"])
 
@@ -555,7 +538,7 @@ with tab1:
     )
     st.plotly_chart(fig_tenor, width='stretch')
     if max(abs(d) for d in pct_diff) < 1:
-        st.caption("이 조건에서는 만기물을 어떤 걸 골라도 가격이 1% 넘게 안 움직여요. 지금 옵션이 깊은 내가격이라 금리 민감도가 낮기 때문이에요.")
+        st.caption("이 조건에서는 만기물을 어떤 걸 골라도 가격이 1% 넘게 안 움직임. 지금 옵션이 깊은 내가격이라 금리 민감도가 낮기 때문.")
 
 
 with tab2:
@@ -565,7 +548,7 @@ with tab2:
     fig_r.add_vline(x=r * 100, line_dash="dot", line_color="green", annotation_text="현재 r")
     fig_r.update_layout(xaxis_title="무위험이자율 r (%)", yaxis_title="옵션 이론가", height=380)
     st.plotly_chart(fig_r, width='stretch')
-    st.caption(f"Rho = {greeks['Rho']:.4f}, 금리가 1%p 오르면 옵션가는 약 {greeks['Rho']:,.1f} 변해요.")
+    st.caption(f"Rho = {greeks['Rho']:.4f}, 금리가 1%p 오르면 옵션가는 약 {greeks['Rho']:,.1f} 변함.")
 
 with tab3:
     sig_range = np.linspace(max(sigma - 0.30, 0.01), sigma + 0.30, 60)
@@ -574,7 +557,7 @@ with tab3:
     fig_sig.add_vline(x=sigma * 100, line_dash="dot", line_color="green", annotation_text="현재 σ")
     fig_sig.update_layout(xaxis_title="변동성 σ (%)", yaxis_title="옵션 이론가", height=380)
     st.plotly_chart(fig_sig, width='stretch')
-    st.caption(f"Vega = {greeks['Vega']:.4f}, 변동성이 1%p 오르면 옵션가는 약 {greeks['Vega']:,.1f} 변해요.")
+    st.caption(f"Vega = {greeks['Vega']:.4f}, 변동성이 1%p 오르면 옵션가는 약 {greeks['Vega']:,.1f} 변함.")
 
 with tab4:
     s_range = np.linspace(S * 0.5, S * 1.5, 60)
@@ -584,13 +567,10 @@ with tab4:
     fig_s.add_vline(x=K, line_dash="dash", line_color="red", annotation_text="행사가 K")
     fig_s.update_layout(xaxis_title="기초주가 S", yaxis_title="옵션 이론가", height=380)
     st.plotly_chart(fig_s, width='stretch')
-    st.caption(f"Delta = {greeks['Delta']:.4f}, 주가가 1원 오르면 옵션가는 약 {greeks['Delta']:.4f} 변해요.")
+    st.caption(f"Delta = {greeks['Delta']:.4f}, 주가가 1원 오르면 옵션가는 약 {greeks['Delta']:.4f} 변함.")
 
 st.divider()
 with st.expander("계산식"):
     st.latex(r"C = S e^{-qT} N(d_1) - K e^{-rT} N(d_2)")
     st.latex(r"d_1 = \frac{\ln(S/K) + (r - q + \sigma^2/2)T}{\sigma\sqrt{T}}, \quad d_2 = d_1 - \sigma\sqrt{T}")
-    st.caption("r은 옵션 잔존만기 T에 맞춰 국채 금리곡선(1,3,5,10,20,30년물)을 보간한 값이에요.")
-
-
-
+    st.caption("r은 옵션 잔존만기 T에 맞춰 국채 금리곡선(1,3,5,10,20,30년물)을 보간한 값.")
