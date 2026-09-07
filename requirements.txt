@@ -5,4 +5,5 @@ scipy
 plotly
 requests
 python-dotenv
-pykrx
+setuptools
+pykrx==1.2.8
