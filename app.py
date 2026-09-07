@@ -18,6 +18,10 @@ import plotly.graph_objects as go
 
 load_dotenv()
 
+for key in ("DART_API_KEY", "ECOS_API_KEY"):
+    if key in st.secrets and not os.getenv(key):
+        os.environ[key] = st.secrets[key]
+
 st.set_page_config(page_title="워런트 블랙숄즈 가치평가", layout="wide")
 
 
