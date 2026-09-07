@@ -4,6 +4,7 @@ import io
 import os
 import zipfile
 import xml.etree.ElementTree as ET
+import time
 
 import numpy as np
 import pandas as pd
@@ -112,29 +113,43 @@ def fetch_krx_price_history(ticker: str, lookback_days: int):
 
 
 # DART 공시로 배당수익률(q) 자동조회
+# DART 공시로 배당수익률(q) 자동조회
 @st.cache_data(ttl=7 * 24 * 60 * 60, show_spinner=False)
-def fetch_dart_corp_codes(dart_key: str):
-    try:
-        url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={dart_key}"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            xml_bytes = zf.read(zf.namelist()[0])
-        root = ET.fromstring(xml_bytes)
-        mapping = {}
-        for child in root.findall("list"):
-            stock_code = (child.findtext("stock_code") or "").strip()
-            corp_code = (child.findtext("corp_code") or "").strip()
-            corp_name = (child.findtext("corp_name") or "").strip()
-            if stock_code:
-                mapping[stock_code] = {"corp_code": corp_code, "corp_name": corp_name}
-        if not mapping:
-            return None, "고유번호 목록이 비어있음 (인증키 확인)"
-        return mapping, None
-    except zipfile.BadZipFile:
-        return None, "고유번호 응답 파싱 실패 (인증키가 잘못됐을 가능성)"
-    except Exception as e:
-        return None, f"DART 고유번호 조회 오류: {e}"
+def fetch_dart_corp_codes(dart_key: str, max_retries: int = 3):
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={dart_key}"
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                xml_bytes = zf.read(zf.namelist()[0])
+            root = ET.fromstring(xml_bytes)
+            mapping = {}
+            for child in root.findall("list"):
+                stock_code = (child.findtext("stock_code") or "").strip()
+                corp_code = (child.findtext("corp_code") or "").strip()
+                corp_name = (child.findtext("corp_name") or "").strip()
+                if stock_code:
+                    mapping[stock_code] = {"corp_code": corp_code, "corp_name": corp_name}
+            if not mapping:
+                return None, "고유번호 목록이 비어있음 (인증키 확인)"
+            return mapping, None
+
+        except zipfile.BadZipFile:
+            return None, "고유번호 응답 파싱 실패 (인증키가 잘못됐을 가능성)"
+        except requests.exceptions.Timeout:
+            last_error = "DART 서버 응답이 느려서 시간 초과됨"
+        except requests.exceptions.RequestException as e:
+            last_error = f"네트워크 오류: {e}"
+        except Exception as e:
+            last_error = f"DART 고유번호 조회 오류: {e}"
+
+        if attempt < max_retries:
+            time.sleep(2 * attempt)  # 2초, 4초 간격으로 재시도
+
+    return None, f"{max_retries}번 시도했지만 실패함 ({last_error})"
 
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
