@@ -438,7 +438,7 @@ with col1:
 with col2:
     st.metric(f"무위험이자율 r (T={T:.1f}년)", f"{r*100:.3f}%")
 with col3:
-    moneyness = "ITM (내가격)" if (S > K and opt_key == "call") or (S < K and opt_key == "put") else "OTM (외가격)"
+    moneyness = "ITM" if (S > K and opt_key == "call") or (S < K and opt_key == "put") else "OTM"
     st.metric("현재 상태", moneyness)
 
 if S / K > 3 or S / K < 0.33:
